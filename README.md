@@ -100,14 +100,14 @@ All keys are loaded from a `.env` file in the project root via `python-dotenv`.
 
 | Variable | Purpose | Where to Get It |
 |---|---|---|
-| `OPENAI_API_KEY` | LLM inference (`gpt-5-mini`) and embeddings (`text-embedding-3-small`) | [platform.openai.com](https://platform.openai.com) |
+| `GOOGLE_API_KEY` | LLM inference (`gemini-3.1-flash-lite`) and embeddings (`models/gemini-embedding-2`) | [aipplatform.google.com](https://aipplatform.google.com) |
 | `TAVILY_API_KEY` | Web search for current developments and claim verification | [tavily.com](https://tavily.com) |
 | `QDRANT_URL` | Qdrant Cloud endpoint for the vector store | [cloud.qdrant.io](https://cloud.qdrant.io) |
 | `QDRANT_API_KEY` | Authentication for Qdrant Cloud | [cloud.qdrant.io](https://cloud.qdrant.io) |
 
 `.env` file format:
 ```env
-OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...
 TAVILY_API_KEY=tvly-...
 QDRANT_URL=https://your-cluster.qdrant.io
 QDRANT_API_KEY=your-qdrant-api-key
