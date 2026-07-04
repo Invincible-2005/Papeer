@@ -7,6 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from tavily import TavilyClient
 
 from backend.models import BtwRouteDecision
+from backend.rag_graph import clean_content
 
 load_dotenv()
 
@@ -42,5 +43,6 @@ def handle_btw(query: str) -> Generator[str, None, None]:
         ])
 
     for chunk in (answer_prompt | llm).stream({"query": query}):
-        if chunk.content:
-            yield chunk.content
+        cleaned = clean_content(chunk.content)
+        if cleaned:
+            yield cleaned

@@ -13,11 +13,14 @@ load_dotenv()
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-EMBEDDING_DIM = 768  # text-embedding-3-small
+EMBEDDING_DIM = 768  # gemini-embedding-2
 
 # ── Singletons ────────────────────────────────────────────────────────────────
 
-base_embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
+base_embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-2",
+    output_dimensionality=EMBEDDING_DIM
+)
 embedding_file_store = LocalFileStore("./embedding_cache/")
 embeddings = CacheBackedEmbeddings.from_bytes_store(
     base_embeddings,

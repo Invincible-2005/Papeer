@@ -10,8 +10,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from backend.btw_handler import handle_btw
 from backend.paper_loader import load_arxiv, load_document, load_webpage
-from backend.rag_graph import build_graph
 from backend.vector_store import add_paper, list_papers
+from backend.rag_graph import build_graph, clean_content
 
 st.set_page_config(page_title="Papeer", page_icon="📚", layout="centered")
 
@@ -76,7 +76,7 @@ def generate_session_name(first_message: str) -> str:
                 {"role": "user", "content": first_message[:500]},
             ]
         )
-        return response.content.strip()
+        return clean_content(response.content).strip()
     except Exception:
         return "New Session"
 
@@ -114,7 +114,7 @@ def load_session_chats(session_id: str) -> list[dict]:
         turn = 0
         for msg in state.values.get("messages", []):
             type_name = type(msg).__name__
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = clean_content(msg.content)
             if type_name == "HumanMessage":
                 chats.append({"role": "user", "content": content})
             elif type_name in ("AIMessage", "AIMessageChunk"):
@@ -373,12 +373,12 @@ if prompt := st.chat_input("Ask about your papers, verify a claim, or search the
                     and hasattr(chunk, "content")
                     and chunk.content
                 ):
-                    response_text += chunk.content
+                    response_text += clean_content(chunk.content)
                     placeholder.markdown(response_text + "▌")
 
             if not response_text:
                 final_values = graph.get_state(config).values
-                response_text = final_values.get("answer") or "No response generated."
+                response_text = clean_content(final_values.get("answer")) or "No response generated."
 
             placeholder.markdown(response_text)
 

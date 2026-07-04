@@ -26,6 +26,19 @@ load_dotenv()
 llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite")
 
 
+def clean_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                text_parts.append(part["text"])
+        return "".join(text_parts)
+    return str(content)
+
 # ── State ─────────────────────────────────────────────────────────────────────
 
 class RAGState(MessagesState):
@@ -72,7 +85,7 @@ router_chain = ROUTER_PROMPT | llm.with_structured_output(RouterDecision)
 
 
 def router_node(state: RAGState) -> dict:
-    query = state["messages"][-1].content
+    query = clean_content(state["messages"][-1].content)
     decision: RouterDecision = router_chain.invoke({"query": query})
     return {"route": decision.route}
 
@@ -139,7 +152,7 @@ def web_search(
 # ── Retrieval agent singletons ────────────────────────────────────────────────
 
 RETRIEVAL_TOOLS = [retrieve_from_vectorstore, web_search]
-retrieval_llm = llm.bind_tools(RETRIEVAL_TOOLS, parallel_tool_calls=False)
+retrieval_llm = llm.bind_tools(RETRIEVAL_TOOLS)
 base_tool_node = ToolNode(RETRIEVAL_TOOLS)
 
 RETRIEVE_SYSTEM = (
@@ -224,7 +237,7 @@ def query_rewrite_node(state: RAGState) -> dict:
         {"role": "system", "content": QUERY_REWRITE_SYSTEM},
         {"role": "user", "content": f"Original query: {original_query}\n\nWrite an improved search query."},
     ])
-    rewritten = response.content.strip()
+    rewritten = clean_content(response.content).strip()
     return {
         "messages": [HumanMessage(content=rewritten)],
         "query": rewritten,
@@ -252,7 +265,7 @@ verification_llm = llm.with_structured_output(ClaimVerificationResult)
 
 
 def verify_claim_node(state: RAGState) -> dict:
-    claim = state["messages"][-1].content
+    claim = clean_content(state["messages"][-1].content)
     tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
     # General web search for recent work superseding the claim
@@ -321,7 +334,7 @@ def generate_answer_node(state: RAGState) -> dict:
             else:
                 context = "\n\n---\n\n".join(doc.page_content for doc in docs)
                 prompt = f"Answer the question using this context:\n\n{context}\n\nQuestion: {query}"
-                answer = llm.invoke([{"role": "user", "content": prompt}]).content
+                answer = clean_content(llm.invoke([{"role": "user", "content": prompt}]).content)
 
     elif route == "verify_claim":
         verdict = state.get("claim_verdict", "")
@@ -351,7 +364,7 @@ def generate_answer_node(state: RAGState) -> dict:
 
     else:  # direct_answer
         prompt = f"Answer from your knowledge.\n\nQuestion: {query}"
-        answer = llm.invoke([{"role": "user", "content": prompt}]).content
+        answer = clean_content(llm.invoke([{"role": "user", "content": prompt}]).content)
 
     return {"answer": answer, "messages": [AIMessage(content=answer)]}
 

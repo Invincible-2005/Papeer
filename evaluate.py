@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+import time
 from uuid import uuid4
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -23,10 +24,66 @@ from deepeval.synthesizer.config import ContextConstructionConfig
 from deepeval.test_case import LLMTestCase
 
 from backend.paper_loader import load_document
-from backend.rag_graph import build_graph
+from backend.rag_graph import build_graph, clean_content
 from backend.vector_store import add_paper
 
 load_dotenv()
+
+from deepeval.models.base_model import DeepEvalBaseLLM
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+class GeminiModel(DeepEvalBaseLLM):
+    def __init__(self, model_name="gemini-3.1-flash-lite"):
+        self.model_name = model_name
+        self.model = ChatGoogleGenerativeAI(model=model_name)
+
+    def load_model(self):
+        return self.model
+
+    def generate(self, prompt: str, schema=None, **kwargs) -> str:
+        retries = 5
+        delay = 12
+        for i in range(retries):
+            try:
+                if schema:
+                    structured_model = self.model.with_structured_output(schema)
+                    res = structured_model.invoke(prompt)
+                    return res.model_dump_json()
+                else:
+                    return clean_content(self.model.invoke(prompt).content)
+            except Exception as e:
+                if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                    print(f"Rate limited (429) in generate. Retrying in {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    raise e
+        raise Exception("Max retries exceeded for rate limit in generate")
+
+    async def a_generate(self, prompt: str, schema=None, **kwargs) -> str:
+        import asyncio
+        retries = 5
+        delay = 12
+        for i in range(retries):
+            try:
+                if schema:
+                    structured_model = self.model.with_structured_output(schema)
+                    res = await structured_model.ainvoke(prompt)
+                    return res.model_dump_json()
+                else:
+                    res = await self.model.ainvoke(prompt)
+                    return clean_content(res.content)
+            except Exception as e:
+                if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                    print(f"Rate limited (429) in a_generate. Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                else:
+                    raise e
+        raise Exception("Max retries exceeded for rate limit in a_generate")
+
+    def get_model_name(self):
+        return self.model_name
 
 PDF_PATH            = "documents/Openclaw_Research_Report.pdf"
 GOLDENS_FILE        = Path("goldens.json")
@@ -36,7 +93,8 @@ METRIC_THRESHOLD    = 0.7
 
 
 def generate_goldens() -> list[dict]:
-    synthesizer = Synthesizer()
+    gemini_model = GeminiModel("gemini-1.5-flash")
+    synthesizer = Synthesizer(model=gemini_model)
     goldens = synthesizer.generate_goldens_from_docs(
         document_paths=[PDF_PATH],
         include_expected_output=True,
@@ -60,20 +118,32 @@ def load_goldens() -> list[dict]:
 
 def run_rag_query(graph, query: str, session_id: str) -> tuple[str, list[str]]:
     config = {"configurable": {"thread_id": str(session_id)}}
-    final_state = graph.invoke(
-        {
-            "messages": [HumanMessage(content=query)],
-            "session_id": session_id,
-            "query": query,
-            "retrieved_docs": [],
-            "retrieval_attempts": 0,
-            "rewrite_count": 0,
-        },
-        config=config,
-    )
-    answer = final_state.get("answer") or ""
-    retrieval_context = [doc.page_content for doc in (final_state.get("retrieved_docs") or [])]
-    return answer, retrieval_context
+    retries = 6
+    delay = 30
+    for attempt in range(retries):
+        try:
+            final_state = graph.invoke(
+                {
+                    "messages": [HumanMessage(content=query)],
+                    "session_id": session_id,
+                    "query": query,
+                    "retrieved_docs": [],
+                    "retrieval_attempts": 0,
+                    "rewrite_count": 0,
+                },
+                config=config,
+            )
+            answer = final_state.get("answer") or ""
+            retrieval_context = [doc.page_content for doc in (final_state.get("retrieved_docs") or [])]
+            return answer, retrieval_context
+        except Exception as e:
+            if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                print(f"RAG graph rate limited (429). Retrying in {delay}s... (attempt {attempt + 1}/{retries})")
+                time.sleep(delay)
+                delay = min(delay * 2, 120)
+            else:
+                raise e
+    raise Exception("Max retries exceeded for rate limit in run_rag_query")
 
 
 def main() -> None:
@@ -81,13 +151,14 @@ def main() -> None:
 
     docs = load_document(PDF_PATH)
     graph = build_graph(db_path="eval_checkpoints.db")
+    gemini_model = GeminiModel("gemini-3.1-flash-lite")
 
     metrics = [
-        ContextualPrecisionMetric(threshold=METRIC_THRESHOLD, model="gpt-5.4-mini"),
-        ContextualRecallMetric(threshold=METRIC_THRESHOLD, model="gpt-5.4-mini"),
-        ContextualRelevancyMetric(threshold=METRIC_THRESHOLD, model="gpt-5.4-mini"),
-        AnswerRelevancyMetric(threshold=METRIC_THRESHOLD, model="gpt-5.4-mini"),
-        FaithfulnessMetric(threshold=METRIC_THRESHOLD, model="gpt-5.4-mini"),
+        ContextualPrecisionMetric(threshold=METRIC_THRESHOLD, model=gemini_model, async_mode=False),
+        ContextualRecallMetric(threshold=METRIC_THRESHOLD, model=gemini_model, async_mode=False),
+        ContextualRelevancyMetric(threshold=METRIC_THRESHOLD, model=gemini_model, async_mode=False),
+        AnswerRelevancyMetric(threshold=METRIC_THRESHOLD, model=gemini_model, async_mode=False),
+        FaithfulnessMetric(threshold=METRIC_THRESHOLD, model=gemini_model, async_mode=False),
     ]
 
     test_cases = []
@@ -105,11 +176,12 @@ def main() -> None:
                 retrieval_context=retrieval_context,
             )
         )
+        print(f"Generated test case {len(test_cases)}/{len(pairs)}. Sleeping 12s to avoid rate limit...")
+        time.sleep(12)
 
     results = evaluate(
         test_cases,
         metrics,
-        async_config=AsyncConfig(max_concurrent=3, throttle_value=5),
     )
 
     summary = []
