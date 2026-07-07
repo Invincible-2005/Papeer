@@ -10,7 +10,6 @@ dist
 .DS_Store
 *.tsbuildinfo
 checkpoints.db
-documents
 embedding_cache
 backend\__pycache__
 .deepeval

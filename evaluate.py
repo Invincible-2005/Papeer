@@ -179,31 +179,64 @@ def main() -> None:
         print(f"Generated test case {len(test_cases)}/{len(pairs)}. Sleeping 12s to avoid rate limit...")
         time.sleep(12)
 
-    results = evaluate(
-        test_cases,
-        metrics,
-    )
-
-    summary = []
-    for test_result in results.test_results:
-        summary.append({
-            "input": test_result.input,
-            "actual_output": test_result.actual_output,
-            "success": test_result.success,
-            "metrics": [
-                {
-                    "name": m.name,
-                    "score": m.score,
-                    "passed": m.success,
-                    "reason": m.reason,
-                }
-                for m in test_result.metrics_data
-            ],
-        })
-
     results_path = Path("eval_results.json")
-    results_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nResults saved to {results_path}.")
+    # Load any previously saved results so we can resume
+    if results_path.exists():
+        summary = json.loads(results_path.read_text(encoding="utf-8"))
+    else:
+        summary = []
+
+    already_done = {item["input"] for item in summary}
+
+    for idx, tc in enumerate(test_cases, 1):
+        if tc.input in already_done:
+            print(f"[{idx}/{len(test_cases)}] Skipping already-evaluated: {tc.input[:60]}...")
+            continue
+
+        print(f"\n[{idx}/{len(test_cases)}] Evaluating: {tc.input[:60]}...")
+        try:
+            result = evaluate(
+                [tc],
+                metrics,
+                async_config=AsyncConfig(max_concurrent=1),
+            )
+
+            for test_result in result.test_results:
+                entry = {
+                    "input": test_result.input,
+                    "actual_output": test_result.actual_output,
+                    "success": test_result.success,
+                    "metrics": [
+                        {
+                            "name": m.name,
+                            "score": m.score,
+                            "passed": m.success,
+                            "reason": m.reason,
+                        }
+                        for m in test_result.metrics_data
+                    ],
+                }
+                summary.append(entry)
+
+            # Save after every successful test case
+            results_path.write_text(
+                json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"  ✓ Saved. Total results so far: {len(summary)}")
+
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            print(f"  Saving progress and continuing...")
+            results_path.write_text(
+                json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+
+        # Sleep between test cases to respect rate limits
+        if idx < len(test_cases):
+            print(f"  Sleeping 15s to respect rate limits...")
+            time.sleep(15)
+
+    print(f"\nDone. {len(summary)} results saved to {results_path}.")
 
 
 if __name__ == "__main__":
